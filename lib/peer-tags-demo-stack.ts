@@ -9,6 +9,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as kinesis from 'aws-cdk-lib/aws-kinesis';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import { DatadogLambda } from "datadog-cdk-constructs-v2";
 
@@ -22,6 +23,31 @@ export class PeerTagsDemoStack extends cdk.Stack {
       partitionKey: { name: 'uuid', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // For development - change for production
+    });
+
+    // Create S3 bucket
+    const bucket = new s3.Bucket(this, 'peer-tags-bucket', {
+      bucketName: 'peer-tags-bucket',
+      versioned: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // For development - change for production
+      autoDeleteObjects: true, // For development - change for production
+      lifecycleRules: [
+        {
+          expiration: cdk.Duration.days(90), // Objects expire after 90 days
+          transitions: [
+            {
+              storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: cdk.Duration.days(30), // Minimum 30 days for STANDARD_IA
+            },
+            {
+              storageClass: s3.StorageClass.GLACIER,
+              transitionAfter: cdk.Duration.days(60), // Minimum 90 days for Glacier
+            },
+          ],
+        },
+      ],
     });
 
     // Create Kinesis stream
@@ -43,6 +69,7 @@ export class PeerTagsDemoStack extends cdk.Stack {
 
     // Lambda function for publisher.
     const publisherLambda = new lambda.Function(this, 'peer-tags-publisher', {
+      functionName: 'peer-tags-publisher',
       runtime: lambda.Runtime.NODEJS_20_X,  // Specify runtime
       handler: 'publisher.handler',            // Specify the handler function
       code: lambda.Code.fromAsset('lambda'), // Path to Lambda code
@@ -53,11 +80,13 @@ export class PeerTagsDemoStack extends cdk.Stack {
         SNS_TOPIC_ARN: topic.topicArn,
         EVENT_BUS_NAME: eventBus.eventBusName,
         KINESIS_STREAM_NAME: stream.streamName,
+        S3_BUCKET_NAME: bucket.bucketName,
       }
     });
     
     // Lambda function for SNS consumer.
     const snsConsumerLambda = new lambda.Function(this, 'peer-tags-sns-consumer', {
+      functionName: 'peer-tags-sns-consumer',
       runtime: lambda.Runtime.NODEJS_20_X,  // Specify runtime
       handler: 'sns-consumer.handler',            // Specify the handler function
       code: lambda.Code.fromAsset('lambda'), // Path to Lambda code
@@ -71,6 +100,7 @@ export class PeerTagsDemoStack extends cdk.Stack {
 
     // Lambda function for EventBridge consumer.
     const eventBridgeConsumerLambda = new lambda.Function(this, 'peer-tags-eventbridge-consumer', {
+      functionName: 'peer-tags-eventbridge-consumer',
       runtime: lambda.Runtime.NODEJS_20_X,  // Specify runtime
       handler: 'eventbridge-consumer.handler',  // Specify the handler function
       code: lambda.Code.fromAsset('lambda'), // Path to Lambda code
@@ -83,6 +113,7 @@ export class PeerTagsDemoStack extends cdk.Stack {
 
     // Lambda function for Kinesis consumer.
     const kinesisConsumerLambda = new lambda.Function(this, 'peer-tags-kinesis-consumer', {
+      functionName: 'peer-tags-kinesis-consumer',
       runtime: lambda.Runtime.NODEJS_20_X,  // Specify runtime
       handler: 'kinesis-consumer.handler',  // Specify the handler function
       code: lambda.Code.fromAsset('lambda'), // Path to Lambda code
@@ -102,13 +133,15 @@ export class PeerTagsDemoStack extends cdk.Stack {
 
     // Lambda function for SQS consumer
     const sqsConsumerLambda = new lambda.Function(this, 'peer-tags-sqs-consumer', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'sqs-consumer.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      memorySize: 128,
-      timeout: cdk.Duration.seconds(5),
+      functionName: 'peer-tags-sqs-consumer',
+      runtime: lambda.Runtime.NODEJS_20_X,  // Specify runtime
+      handler: 'sqs-consumer.handler',  // Specify the handler function
+      code: lambda.Code.fromAsset('lambda'), // Path to Lambda code
+      memorySize: 128,                      // Memory allocation
+      timeout: cdk.Duration.seconds(5),     // Timeout in seconds
       environment: {
         DD_COLD_START_TRACING: 'false',
+        S3_BUCKET_NAME: bucket.bucketName,
       }
     });
 
@@ -120,6 +153,7 @@ export class PeerTagsDemoStack extends cdk.Stack {
     stream.grantRead(kinesisConsumerLambda);
     queue.grantSendMessages(publisherLambda);
     queue.grantConsumeMessages(sqsConsumerLambda);
+    bucket.grantWrite(sqsConsumerLambda);
 
     // Subscribe the SNS consumer Lambda to the SNS topic
     topic.addSubscription(new snsSubs.LambdaSubscription(snsConsumerLambda));
@@ -229,6 +263,11 @@ export class PeerTagsDemoStack extends cdk.Stack {
     // Output SQS consumer function ARN
     new cdk.CfnOutput(this, 'sqsConsumerLambdaFunctionArn', {
       value: sqsConsumerLambda.functionArn,
+    });
+
+    // Output S3 bucket name
+    new cdk.CfnOutput(this, 'S3BucketName', {
+      value: bucket.bucketName,
     });
   }
 } 
