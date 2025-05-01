@@ -1,6 +1,6 @@
-# Welcome to your CDK TypeScript project
+# peer-tags-demo
 
-This is a blank project for CDK development with TypeScript.
+This is an AWS app (contains several resources) instrumented by Datadog. It contains all the resources we create inferred spans for.
 
 The `cdk.json` file tells the CDK Toolkit how to execute your app.
 
